@@ -179,6 +179,11 @@ def create_client_from_config(
             reasoning_format=reasoning_format,
             **common_kwargs,
         )
+    elif provider == "google":
+        return GoogleClient(
+            api_key=os.getenv("GOOGLE_API_KEY"),
+            **common_kwargs,
+        )
 
     # Could extend to other providers if needed
     raise ValueError(f"create_client_from_config only supports huggingface, got: {provider}")

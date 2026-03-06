@@ -157,6 +157,30 @@ Each compiled rule is a Python function body with access to `card` (current card
 
 The game uses a double deck (104 cards).
 
+## Taking the test
+
+Install dependencies with uv.
+```shell
+uv sync
+```
+Then choose a model for the rule_compiler in `config.yaml`. A free solution is to create a Gemini API key.
+```yaml
+rule_compiler:
+  provider: google
+  model_id: gemini-3.1-flash-lite-preview
+```
+Then you can run the script.
+```shell
+uv run python scripts/evaluate_human.py
+```
+This starts an interactive session for playing Eleusis in the same conditions as LLMs.
+You can quit the session at any time, and restart the script to resume the game from the last **completed** round. This will incrementally fill `results/260121_78_rounds/solo_evaluation_human/results.json`.
+
+After that you will be able to generate the plots with your average score besides LLMs' scores.
+```shell
+uv run python scripts/analyze_results.py results/260121_78_rounds
+```
+
 ## Project Structure
 
 ```
@@ -180,6 +204,7 @@ src/eleusis/
   runner.py           Round orchestration
 
 scripts/
+  evaluate_human.py          Human evaluation
   evaluate_single.py         Single-model evaluation
   run_parallel_eval.sh       Parallel multi-model evaluation
   analyze_results.py         Post-hoc analysis and charts
