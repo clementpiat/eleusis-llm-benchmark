@@ -2,6 +2,7 @@
 
 import hashlib, json, random, time
 from pathlib import Path
+from typing import Any
 
 import yaml
 from dotenv import load_dotenv
@@ -16,6 +17,7 @@ ROOT = Path(__file__).parent.parent
 RESULTS_FILE = ROOT / "results/260121_78_rounds/solo_evaluation_human/results.json"
 PLAYER = "Human"
 SUITS_ORDER = [Suit.HEARTS, Suit.DIAMONDS, Suit.SPADES, Suit.CLUBS]
+ALPHABET = "abcdefghijkl"
 
 
 def sort_hand(state: GameState) -> list[Card]:
@@ -32,10 +34,12 @@ def print_state(
     print(f"\n—- Turn {turn_number}/{max_turns}")
     print(f"Board: {state.to_compact_string()}\n")
 
-    index = 1
+    index = 0
     for suit in SUITS_ORDER:
         suit_cards = [card for card in hand if card.suit == suit]
-        entries = "  ".join(f"({index + i}) {str(card)}" for i, card in enumerate(suit_cards))
+        entries = "  ".join(
+            f"({ALPHABET[index + i]}) {str(card)}" for i, card in enumerate(suit_cards)
+        )
         index += len(suit_cards)
         print(entries)
 
@@ -47,27 +51,26 @@ def get_action(state: GameState) -> tuple[str, Card | None, str]:
     """Ask the player to pick a card or guess the rule."""
     hand = sort_hand(state)
     while True:
-        raw = input("\n[1-12] play card or [g]uess the rule > ").strip().lower()
-        if raw == "g":
+        input_text = input("\n[a-l] play card or [guess] the rule > ").strip().lower()
+        if input_text == "guess":
             rule_text = input("Describe the rule: ").strip()
-            raw = input("[1-12] play future card in case your guess is wrong > ").strip().lower()
-            if rule_text and raw.isdigit():
-                index = int(raw)
-                if 1 <= index <= len(hand):
-                    return "guess", hand[index - 1], rule_text
+            future_card_text = (
+                input("[a-l] play future card in case your guess is wrong > ").strip().lower()
+            )
+            if rule_text and future_card_text in ALPHABET and len(future_card_text) == 1:
+                index = ALPHABET.index(future_card_text)
+                return "guess", hand[index], rule_text
 
-        elif raw.isdigit():
-            index = int(raw)
-            if 1 <= index <= len(hand):
-                return "play", hand[index - 1], ""
+        elif input_text in ALPHABET and len(input_text) == 1:
+            index = ALPHABET.index(input_text)
+            return "play", hand[index], ""
 
 
-def play_round(engine: GameEngine, state: GameState, config: dict, rule_number: int) -> dict:
-    """Run one interactive round and return the round result dict."""
+def play_round(engine: GameEngine, state: GameState, config: dict) -> dict:
+    """Run one interactive round."""
     max_turns = config["game"]["max_turns"]
     start_time = time.time()
     turn_index, failed_guesses, turns_data = 0, [], []
-    print(f"{'=' * 52} \nRule {rule_number}{'=' * 52}")
     first_correct_turn = None
     while turn_index < max_turns and not engine.is_game_over():
         state.turn_number = turn_index + 1
@@ -135,8 +138,10 @@ def play_round(engine: GameEngine, state: GameState, config: dict, rule_number: 
     }
 
 
-def setup_engine(rule: Rule, config: dict, compiler) -> tuple[GameEngine, GameState]:
-    """Create a GameEngine and GameState for a rule, with a seeded deck shuffle."""
+def setup_engine(
+    rule: Rule, config: dict, compiler: Any, round_number: int
+) -> tuple[GameEngine, GameState]:
+    """Create a GameEngine and GameState for a rule."""
     state = GameState(PLAYER)
     engine = GameEngine(
         state,
@@ -152,24 +157,24 @@ def setup_engine(rule: Rule, config: dict, compiler) -> tuple[GameEngine, GameSt
     )
     base_seed = config["game"].get("seed")
     rule_hash = int(hashlib.md5(rule.get_code().encode()).hexdigest(), 16) & 0xFFFFFFFF
-    engine.setup_game((base_seed + rule_hash) & 0xFFFFFFFF if base_seed else None)
+    engine.setup_game(
+        (base_seed + rule_hash + (round_number - 1)) & 0xFFFFFFFF if base_seed else None
+    )
     return engine, state
 
 
 def main():
     config = yaml.safe_load(open(ROOT / "config.yaml"))
     all_rules = json.load(open(ROOT / config["rules"]["library_path"]))["rules"]
+    all_rules = [(rule, round_number) for rule in all_rules for round_number in range(3)]
     random.seed(0)
-    all_rules = [random.choice(all_rules) for _ in range(100)]
+    random.shuffle(all_rules)
 
-    compiler = create_client_from_config(config["rule_compiler"])
+    compiler = create_client_from_config(config["rule_compiler"], max_tokens=10_000)
     RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     if RESULTS_FILE.exists():
         results = json.load(open(RESULTS_FILE))
-        played_names = {round_["rule_name"] for round_ in results["rounds"]}
-        remaining_rules = [rule for rule in all_rules if rule["name"] not in played_names]
-        round_start = len(results["rounds"]) + 1
-        print(f"Resuming: {len(played_names)} done, {len(remaining_rules)} remaining")
+        all_rules = all_rules[len(results["rounds"]) :]
     else:
         results = {
             "config": {
@@ -181,17 +186,15 @@ def main():
             },
             "rounds": [],
         }
-        remaining_rules = all_rules
-        round_start = 1
 
-    for rule_number, rule_data in enumerate(remaining_rules, start=round_start):
+    for rule_data, round_number in all_rules:
         rule = Rule(rule_data["description"], rule_data["code"])
-        engine, state = setup_engine(rule, config, compiler)
+        engine, state = setup_engine(rule, config, compiler, round_number)
 
-        round_result = play_round(engine, state, config, rule_number)
+        round_result = play_round(engine, state, config)
         results["rounds"].append(
             {
-                "round_number": 1,
+                "round_number": round_number,
                 "rule_name": rule_data["name"],
                 "rule_description": rule_data["description"],
                 "rule_code": rule_data["code"],
@@ -200,9 +203,8 @@ def main():
         )
         json.dump(results, open(RESULTS_FILE, "w"), indent=2)
 
-        if rule_number < len(all_rules):
-            if input("\nNext rule? [Enter q to stop] ").strip().lower() == "q":
-                break
+        if input("\nNext rule? [Enter q to stop] ").strip().lower() == "q":
+            break
 
 
 if __name__ == "__main__":
